@@ -2,7 +2,7 @@
 
 This mini project verifies a user identity by:
 1. Running OCR on an uploaded ID image via **Tesseract.js**.
-2. Running a simple (mock) face verification logic on ID vs selfie.
+2. Running AI face verification on the ID photo vs selfie using **face-api.js** face embeddings.
 3. Hashing OCR output with **SHA-256**.
 4. Writing verification proof (`hash`, `status`) to an Ethereum smart contract on **Ganache** using **Ethers.js**.
 
@@ -51,6 +51,7 @@ PORT=3000
 GANACHE_RPC_URL=http://127.0.0.1:7545
 PRIVATE_KEY=0xYOUR_GANACHE_ACCOUNT_PRIVATE_KEY
 CONTRACT_ADDRESS=0xYOUR_DEPLOYED_CONTRACT_ADDRESS
+FACE_DISTANCE_THRESHOLD=0.5
 ```
 
 ## 3) Install + Run Backend
@@ -91,17 +92,23 @@ Success response:
 {
   "extractedText": "...",
   "verified": true,
-  "hash": "..."
+  "hash": "...",
+  "faceMatchScore": 0.83,
+  "faceMatchDistance": 0.31,
+  "faceMatchThreshold": 0.5,
+  "faceVerificationReason": "Face embeddings matched within the configured threshold."
 }
 ```
 
 ## Notes on Face Verification
 
-The current face verification is intentionally simple for demo purposes:
-- It compares ID image file size vs selfie file size.
-- If the size difference ratio is under threshold, it returns verified.
+The backend now uses face embeddings to compare the uploaded ID image and selfie:
+- `tinyFaceDetector` finds a face in each image
+- `faceLandmark68TinyNet` aligns the detected face
+- `faceRecognitionNet` produces descriptors for comparison
+- Verification passes when descriptor distance is less than `FACE_DISTANCE_THRESHOLD`
 
-In production, replace this with a real face model (e.g., FaceNet/ArcFace pipeline).
+If no face is detected in either image, the verification returns `verified: false` with a reason.
 
 ## Error Handling Included
 

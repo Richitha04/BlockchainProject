@@ -5,6 +5,8 @@ const errorBox = document.getElementById('error');
 const resultSection = document.getElementById('result');
 const extractedTextEl = document.getElementById('extractedText');
 const statusBadge = document.getElementById('statusBadge');
+const faceScore = document.getElementById('faceScore');
+const faceReason = document.getElementById('faceReason');
 const hashValue = document.getElementById('hashValue');
 
 const API_BASE_URL = 'http://localhost:3000';
@@ -54,6 +56,11 @@ form.addEventListener('submit', async (event) => {
 
     extractedTextEl.textContent = data.extractedText || 'No readable text found.';
     hashValue.textContent = data.hash;
+    faceScore.textContent =
+      typeof data.faceMatchScore === 'number'
+        ? `${(data.faceMatchScore * 100).toFixed(1)}% similarity`
+        : 'No score available';
+    faceReason.textContent = data.faceVerificationReason || 'No details available.';
 
     statusBadge.className = `badge ${data.verified ? 'verified' : 'not-verified'}`;
     statusBadge.textContent = data.verified ? 'Verified' : 'Not Verified';

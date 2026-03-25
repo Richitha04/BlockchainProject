@@ -6,10 +6,18 @@ const fs = require('fs');
 const crypto = require('crypto');
 const Tesseract = require('tesseract.js');
 const { ethers } = require('ethers');
+require('@tensorflow/tfjs-node');
+const faceapi = require('@vladmandic/face-api');
+const canvas = require('canvas');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const MODEL_DIR = path.join(__dirname, 'models');
+const FACE_DISTANCE_THRESHOLD = Number(process.env.FACE_DISTANCE_THRESHOLD || 0.5);
+
+const { Canvas, Image, ImageData, loadImage } = canvas;
+faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 
 app.use(cors());
 app.use(express.json());
@@ -40,18 +48,66 @@ const contract = new ethers.Contract(
   wallet
 );
 
-// Basic simulated "AI" face check.
-// This demo compares image file sizes and treats close sizes as likely match.
-function verifyFaceMock(idImagePath, selfieImagePath) {
-  const idStats = fs.statSync(idImagePath);
-  const selfieStats = fs.statSync(selfieImagePath);
+async function loadFaceModels() {
+  await Promise.all([
+    faceapi.nets.tinyFaceDetector.loadFromDisk(MODEL_DIR),
+    faceapi.nets.faceLandmark68TinyNet.loadFromDisk(MODEL_DIR),
+    faceapi.nets.faceRecognitionNet.loadFromDisk(MODEL_DIR),
+  ]);
+}
 
-  const larger = Math.max(idStats.size, selfieStats.size);
-  const delta = Math.abs(idStats.size - selfieStats.size);
-  const differenceRatio = larger === 0 ? 1 : delta / larger;
+async function detectFaceDescriptor(imagePath) {
+  const image = await loadImage(imagePath);
 
-  // Threshold can be tuned; lower means stricter.
-  return differenceRatio < 0.35;
+  return faceapi
+    .detectSingleFace(
+      image,
+      new faceapi.TinyFaceDetectorOptions({
+        inputSize: 416,
+        scoreThreshold: 0.5,
+      })
+    )
+    .withFaceLandmarks(true)
+    .withFaceDescriptor();
+}
+
+async function verifyFaceAI(idImagePath, selfieImagePath) {
+  const [idDetection, selfieDetection] = await Promise.all([
+    detectFaceDescriptor(idImagePath),
+    detectFaceDescriptor(selfieImagePath),
+  ]);
+
+  if (!idDetection) {
+    return {
+      verified: false,
+      faceMatchDistance: null,
+      faceMatchScore: null,
+      reason: 'No clear face was detected in the uploaded ID image.',
+    };
+  }
+
+  if (!selfieDetection) {
+    return {
+      verified: false,
+      faceMatchDistance: null,
+      faceMatchScore: null,
+      reason: 'No clear face was detected in the uploaded selfie.',
+    };
+  }
+
+  const distance = faceapi.euclideanDistance(idDetection.descriptor, selfieDetection.descriptor);
+  const faceMatchDistance = Number(distance.toFixed(4));
+  const faceMatchScore = Number(Math.max(0, Math.min(1, 1 - distance)).toFixed(4));
+
+  return {
+    verified: distance <= FACE_DISTANCE_THRESHOLD,
+    faceMatchDistance,
+    faceMatchScore,
+    reason:
+      distance <= FACE_DISTANCE_THRESHOLD
+        ? 'Face embeddings matched within the configured threshold.'
+        : 'Face embeddings were too far apart to consider this a match.',
+  };
 }
 
 // Cleanup helper so uploaded files do not accumulate on disk.
@@ -86,8 +142,8 @@ app.post(
       const ocrResult = await Tesseract.recognize(idPath, 'eng');
       extractedText = ocrResult.data.text.trim();
 
-      // Simulated face verification (replace with real model in production).
-      const verified = verifyFaceMock(idPath, selfiePath);
+      const faceVerification = await verifyFaceAI(idPath, selfiePath);
+      const verified = faceVerification.verified;
 
       // Generate proof hash from OCR text.
       const hash = crypto.createHash('sha256').update(extractedText).digest('hex');
@@ -100,6 +156,10 @@ app.post(
         extractedText,
         verified,
         hash,
+        faceMatchScore: faceVerification.faceMatchScore,
+        faceMatchDistance: faceVerification.faceMatchDistance,
+        faceMatchThreshold: FACE_DISTANCE_THRESHOLD,
+        faceVerificationReason: faceVerification.reason,
       });
     } catch (error) {
       console.error('Verification flow error:', error);
@@ -126,6 +186,14 @@ app.use((error, req, res, next) => {
   return next();
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
-});
+loadFaceModels()
+  .then(() => {
+    console.log(`Face verification models loaded from ${MODEL_DIR}`);
+    app.listen(PORT, () => {
+      console.log(`Server running at http://localhost:${PORT}`);
+    });
+  })
+  .catch((error) => {
+    console.error('Failed to load face verification models:', error);
+    process.exit(1);
+  });
